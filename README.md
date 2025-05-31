@@ -86,6 +86,153 @@ It is important to also look at precision and recall:
 - Because fraud cases are so rare, a model could be 99.8% accurate by always predicting “not fraud”. That’s why precision and recall give a better sense of how well the model really works for the minority class.
 
 ## Imbalanced Data Handling Example
-- Under Sampling : remove majority class
-- Over Sampling : create new
-     
+When the dataset is highly imbalanced (e.g., very few frauds vs. many legit transactions), we can use these strategies:
+- Under Sampling : Randomly remove some records from the majority class (class 0: legit) until the dataset is more balanced.
+
+  Pros: Simpler, faster to train.
+
+  Cons: May lose important information from the majority class.
+  
+- Over Sampling : Create new synthetic records for the minority class (class 1: fraud) using techniques like SMOTE, or simply duplicate existing minority class examples until the classes are balanced.
+
+  Pros: Keeps all original data, gives the model more fraud examples to learn from.
+
+  Cons: Can lead to overfitting if not done carefully.
+  
+Commonly used libraries:
+- Under sampling: imblearn.under_sampling.RandomUnderSampler
+- Over sampling: imblearn.over_sampling.SMOTE
+
+## Features Engineering Model Based
+
+```python
+  ## pipeline
+  from imblearn.pipeline import Pipeline
+  from sklearn.ensemble import RandomForestClassifier
+  ## pipeline random over sampling
+  pipeline_random = Pipeline([
+      ("scaler", Scaler()),
+      ('oversampling', RandomOverSampler(random_state=42)),
+      ("classifier", RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1))
+  ])
+  ## pipeline smote
+  pipeline_smote = Pipeline([
+      ("scaler", Scaler()),
+      ('oversampling', SMOTE(random_state=42)),
+      ("classifier", RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1))
+  ])
+  pipelines = {
+      "Random Under Sampling": pipeline_random,
+      "SMOTE": pipeline_smote
+  }
+  for name, pipeline in pipelines.items():
+      print(f"Training pipeline: {name}")
+      # Fit the pipeline
+      pipeline.fit(X_train, y_train)
+      # Evaluate the model
+      from sklearn.metrics import classification_report, confusion_matrix
+      y_pred = pipeline.predict(X_test)
+      print(f"Results for {name}:")
+      print(classification_report(y_test, y_pred))
+      print(confusion_matrix(y_test, y_pred))
+      print("\n")
+  ```
+
+- Sampling Selection
+  
+<img width="433" alt="image" src="https://github.com/user-attachments/assets/3afbbf15-b158-4df4-9bf4-fdec9faab7d2" />
+
+From result I prefered Training pipeline: SMOTE because better recall
+
+```python
+  ## feature importance
+  import shap
+  selected_pipeline = pipelines["SMOTE"]
+  explainer = shap.TreeExplainer(selected_pipeline.named_steps["classifier"])
+  
+  class1_index = y_test[y_test == 1].index
+  shap_values = explainer.shap_values(X_test.loc[class1_index])
+```
+
+I will focus on class 1 True Positive (fraudulent transactions correctly identified) to analyze which feature improve the prediction of fraud transactions.
+
+```python
+  ## feature importance plot
+  shap.summary_plot(shap_values[:, :, 1], X_test.loc[class1_index], plot_type="bar")
+```
+
+![image](https://github.com/user-attachments/assets/1e4ce4e9-2672-4813-aae3-3b33fdc040bf)
+
+The plot above show us Feature Importance then we can select base on top K features 
+
+```python
+  feature_importance = pd.Series(shap_values[:, :, 1].mean(axis=0), index=X_test.columns)
+  feature_importance.sort_values(ascending=False, inplace=True)
+  k = 10
+  selected_features = feature_importance.head(k).index.tolist()
+  print(f"Top {k} features based on SHAP values:")
+  print(selected_features)
+```
+Top 10 features based on SHAP values:
+['V14', 'V10', 'V17', 'V12', 'V4', 'V3', 'V11', 'V16', 'V2', 'V21']
+
+## Train new model with selected features
+
+```python
+  ## train a new model with selected features
+  X_train_selected = X_train[selected_features]
+  X_test_selected = X_test[selected_features]
+  pipeline_selected = Pipeline([
+      ("scaler", Scaler()),
+      ('oversampling', SMOTE(random_state=42)),
+      ("classifier", RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1))
+  ])
+  pipeline_selected.fit(X_train_selected, y_train)
+  y_pred_selected = pipeline_selected.predict(X_test_selected)
+  from sklearn.metrics import classification_report, confusion_matrix
+  print("Results for model with selected features:")
+  print(classification_report(y_test, y_pred_selected))
+  print(confusion_matrix(y_test, y_pred_selected))
+```
+
+<img width="405" alt="image" src="https://github.com/user-attachments/assets/40e9a871-1022-40da-8065-7c01f870ebe3" />
+
+## Summary & Key Findings
+
+This project tackles the Credit Card Fraud Detection problem using a highly imbalanced public dataset, where fraudulent (class 1) transactions account for less than 0.2% of all records.
+
+What we did:
+- Data exploration confirmed extreme class imbalance.
+- Addressed the imbalance with SMOTE (Synthetic Minority Oversampling Technique) to upsample the minority (fraud) class for better learning.
+- Built robust pipelines with scikit-learn and imblearn, comparing models with all features vs. only the Top 10 features selected by SHAP (feature importance/explainability).
+- Evaluated models using metrics: accuracy, precision, recall, f1-score, focusing especially on recall for class 1 (fraud).
+
+Key results:
+- SMOTE + All features:
+- Precision (fraud): 0.85
+- Recall (fraud): 0.84
+- F1-score (fraud): 0.85
+- SMOTE + Top SHAP features:
+- Precision (fraud): 0.80
+- Recall (fraud): 0.84
+- F1-score (fraud): 0.82
+- Using SHAP-based feature selection helps reduce model complexity, with a small trade-off in precision but similar recall (which is crucial for fraud detection).
+
+Interpretation:
+- Both pipelines manage class imbalance well and yield high recall for fraud, which is the key metric in this domain.
+- Feature selection (via SHAP) makes the model more interpretable and lighter, with only a small drop in precision.
+- The workflow demonstrates how sampling, feature importance, and proper evaluation can build practical, explainable fraud detection models.
+  
+# References
+- [Credit Card Fraud Detection Dataset (Kaggle)](https://www.kaggle.com/mlg-ulb/creditcardfraud)
+- [Imbalanced-learn documentation (imblearn)](https://imbalanced-learn.org/stable/)
+- [scikit-learn documentation](https://scikit-learn.org/stable/)
+- [SHAP (SHapley Additive exPlanations)](https://shap.readthedocs.io/en/latest/index.html)
+
+# Contributors
+- Apisit 
+  - [GitHub](https://github.com/Tale98)
+  - [LinkedIn](https://www.linkedin.com/in/apisit-chiamkhunthod-2a11221b4/)
+  - Email: oh.oh.159852357@gmail.com
+
+Feel free to reach out if you have any questions or want to collaborate!
